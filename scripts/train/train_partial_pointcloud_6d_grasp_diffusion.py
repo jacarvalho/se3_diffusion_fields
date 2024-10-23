@@ -45,7 +45,7 @@ def parse_args():
     p.add_argument('--device',  type=str, default='cuda',)
     p.add_argument('--class_type', type=str, default='Mug')
 
-    p.add_argument('--allowed_categories', type=str, default=None, choices="Mug-v00,Mug-v01,Mug-v04,Cup,CAT10",help='for using dataset_acronym_shapenetsem')
+    p.add_argument('--allowed_categories', type=str, default=None, help='for using dataset_acronym_shapenetsem')
     p.add_argument('--batch_size', type=int, default=2, help='Batch size')
 
     opt = p.parse_args()
