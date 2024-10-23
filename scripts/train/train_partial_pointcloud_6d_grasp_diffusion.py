@@ -1,6 +1,11 @@
 import os
 import copy
+import time
+
 import configargparse
+import yaml
+
+from se3dif.datasets.acronym_dataset import load_train_test_split_files, PartialPointcloudAcronymAndSDFDataset
 from se3dif.utils import get_root_src
 
 import torch
@@ -15,6 +20,7 @@ from se3dif.trainer.learning_rate_scheduler import get_learning_rate_schedules
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
 root_dir = os.path.abspath(os.path.dirname(__file__ + '/../../../../../'))
+
 
 
 def parse_args():
@@ -39,6 +45,9 @@ def parse_args():
     p.add_argument('--device',  type=str, default='cuda',)
     p.add_argument('--class_type', type=str, default='Mug')
 
+    p.add_argument('--allowed_categories', type=str, default=None, choices="Mug-v00,Mug-v01,Mug-v04,Cup,CAT10",help='for using dataset_acronym_shapenetsem')
+    p.add_argument('--batch_size', type=int, default=2, help='Batch size')
+
     opt = p.parse_args()
     return opt
 
@@ -49,11 +58,23 @@ def main(opt):
     spec_file = os.path.join(opt.specs_file_dir, opt.spec_file)
     args = load_experiment_specifications(spec_file)
 
+    args['TrainSpecs']['batch_size'] = opt.batch_size  # overwrite batch size
+
+    class_type = opt.class_type if opt.allowed_categories is None else opt.allowed_categories
+
     # saving directories
     root_dir = opt.saving_root
-    exp_dir  = os.path.join(root_dir, args['exp_log_dir'])
+    exp_dir  = os.path.join(root_dir, class_type, args['exp_log_dir'], f"{int(time.time_ns())}")
     args['saving_folder'] = exp_dir
 
+    # create directories
+    os.makedirs(exp_dir, exist_ok=False)
+
+    # save options and args
+    with open(os.path.join(args['saving_folder'], 'opt.yaml'), 'w') as fp:
+        yaml.dump(vars(opt), fp)
+    with open(os.path.join(args['saving_folder'], 'args.yaml'), 'w') as fp:
+        yaml.dump(args, fp)
 
     if opt.device =='cuda':
         if 'cuda_device' in args:
@@ -64,12 +85,55 @@ def main(opt):
     else:
         device = torch.device('cpu')
 
-    ## Dataset
-    train_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'])
-    train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
-    test_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'],
-                                                                  test_files=train_dataset.test_grasp_files)
-    test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    if opt.allowed_categories is None:
+        ## Dataset
+        train_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'])
+        train_dataloader = DataLoader(train_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+        test_dataset = datasets.PartialPointcloudAcronymAndSDFDataset(augmented_rotation=True, one_object=args['single_object'],
+                                                                      test_files=train_dataset.test_grasp_files)
+        test_dataloader = DataLoader(test_dataset, batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True)
+    else:
+        train_files, test_files = load_train_test_split_files(
+            opt.allowed_categories, os.path.join(get_root_src(), '..', 'dataset_acronym_shapenetsem')
+        )
+
+        # Instantiate the dataset with custom train files
+        train_dataset = PartialPointcloudAcronymAndSDFDataset(
+            n_pointcloud=1024,
+            visualize=False,
+            augmented_rotation=True,
+            one_object=False,
+            phase='train',
+            use_split_files=True,
+            train_files=train_files
+        )
+
+        # Instantiate the dataset with custom test files
+        test_dataset = PartialPointcloudAcronymAndSDFDataset(
+            n_pointcloud=1024,
+            visualize=False,
+            augmented_rotation=True,
+            one_object=False,
+            phase='test',
+            use_split_files=True,
+            test_files=test_files
+        )
+
+        # Create DataLoaders
+        data_loader_options = {}
+        data_loader_options['num_workers'] = 0
+        data_loader_options['pin_memory'] = True
+        data_loader_options['persistent_workers'] = data_loader_options['num_workers'] > 0
+
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=True,
+            **data_loader_options)
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=args['TrainSpecs']['batch_size'], shuffle=True, drop_last=False,
+            **data_loader_options)
+
 
     ## Model
     args['device'] = device
@@ -106,7 +170,8 @@ def main(opt):
                 epochs_til_checkpoint=args['TrainSpecs']['epochs_til_checkpoint'],
                 loss_fn=loss_fn, iters_til_checkpoint=args['TrainSpecs']['iters_til_checkpoint'],
                 clip_grad=False, val_loss_fn=val_loss_fn, overwrite=True,
-                val_dataloader=test_dataloader)
+                val_dataloader=test_dataloader
+                  )
 
 
 if __name__ == '__main__':

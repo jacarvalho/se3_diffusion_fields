@@ -6,6 +6,7 @@ import torch
 
 from collections import defaultdict
 
+from se3dif.datasets.acronym_dataset import get_memory_usage_mb
 from se3dif.utils import makedirs, dict_to_device
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.autonotebook import tqdm
@@ -38,6 +39,14 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
     with tqdm(total=len(train_dataloader) * epochs) as pbar:
         train_losses = []
         for epoch in range(epochs):
+            train_dataloader.dataset.clear()
+            val_dataloader.dataset.clear()
+
+            # clear cuda memory
+            torch.cuda.empty_cache()
+
+            print(f"Current memory usage: {get_memory_usage_mb()} MB")
+
             if not epoch % epochs_til_checkpoint and epoch and rank == 0:
                 torch.save(model.state_dict(),
                            os.path.join(checkpoints_dir, 'model_epoch_%04d_iter_%06d.pth' % (epoch, total_steps)))
@@ -61,6 +70,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                     train_loss += single_loss
 
                 train_losses.append(train_loss.item())
+
                 if rank == 0:
                     writer.add_scalar("total_train_loss", train_loss, total_steps)
 

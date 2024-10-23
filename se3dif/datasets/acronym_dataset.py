@@ -1,32 +1,35 @@
+import gc
 import glob
-import copy
 import time
 
 import numpy as np
+import psutil
 import trimesh
 
 from scipy.stats import special_ortho_group
 
-import os
 import torch
 
 from torch.utils.data import DataLoader, Dataset
 import json
 import pickle
 import h5py
-from se3dif.utils import get_data_src
+
+from se3dif.datasets.categories import CAT10
+from se3dif.utils import get_data_src, get_root_src
 
 from se3dif.utils import to_numpy, to_torch, get_grasps_src
-from mesh_to_sdf.surface_point_cloud import get_scan_view, get_hq_scan_view
 from mesh_to_sdf.scan import ScanPointcloud
 
 
 
-import os, sys
+import os
 
 import logging
 logger = logging.getLogger("trimesh")
 logger.setLevel(logging.ERROR)
+
+
 
 
 class AcronymGrasps():
@@ -440,36 +443,50 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
     def __init__(self, class_type=['Cup', 'Mug', 'Fork', 'Hat', 'Bottle'],
                  se3=False, phase='train', one_object=False,
                  n_pointcloud = 1000, n_density = 200, n_coords = 1000,
-                 augmented_rotation=True, visualize=False, split = True, test_files=None):
+                 augmented_rotation=True, visualize=False, split = True,
+                 use_split_files=False,
+                 train_files=None,
+                 test_files=None):
 
         self.class_type = class_type
         self.data_dir = get_data_src()
 
-        self.grasps_dir = os.path.join(self.data_dir, 'grasps')
-
-        self.grasp_files = []
-        for class_type_i in class_type:
-            cls_grasps_files = sorted(glob.glob(self.grasps_dir+'/'+class_type_i+'/*.h5'))
-
-            for grasp_file in cls_grasps_files:
-                g_obj = AcronymGrasps(grasp_file)
-
-                ## Grasp File ##
-                if g_obj.good_grasps.shape[0] > 0:
-                    self.grasp_files.append(grasp_file)
-
-        ## Split Train/Validation
-        n = len(self.grasp_files)
-        train_size = int(n*0.9)
-        test_size  =  n - train_size
-
-        self.train_grasp_files, self.test_grasp_files = torch.utils.data.random_split(self.grasp_files, [train_size, test_size])
-        self.type = 'train'
-        self.len = len(self.train_grasp_files)
-
-        if test_files is not None:
+        if use_split_files:
+            # Handle custom split train and test files
+            assert phase == 'train' and train_files is not None or phase == 'test' and test_files is not None, \
+                'train_files or test_files must be provided'
+            self.train_grasp_files = train_files
             self.test_grasp_files = test_files
-            self.set_test_data()
+            # Set dataset phase and length
+            self.type = phase
+            self.len = len(self.train_grasp_files) if self.type == 'train' else len(self.test_grasp_files)
+        else:
+            # Previous code
+            self.grasps_dir = os.path.join(self.data_dir, 'grasps')
+
+            self.grasp_files = []
+            for class_type_i in class_type:
+                cls_grasps_files = sorted(glob.glob(self.grasps_dir+'/'+class_type_i+'/*.h5'))
+
+                for grasp_file in cls_grasps_files:
+                    g_obj = AcronymGrasps(grasp_file)
+
+                    ## Grasp File ##
+                    if g_obj.good_grasps.shape[0] > 0:
+                        self.grasp_files.append(grasp_file)
+
+            ## Split Train/Validation
+            n = len(self.grasp_files)
+            train_size = int(n*0.9)
+            test_size  =  n - train_size
+
+            self.train_grasp_files, self.test_grasp_files = torch.utils.data.random_split(self.grasp_files, [train_size, test_size])
+            self.type = 'train'
+            self.len = len(self.train_grasp_files)
+
+            if test_files is not None:
+                self.test_grasp_files = test_files
+                self.set_test_data()
 
         self.n_pointcloud = n_pointcloud
         self.n_density  = n_density
@@ -497,12 +514,12 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
     def _get_grasps(self, grasp_obj):
         try:
             rix = np.random.randint(low=0, high=grasp_obj.good_grasps.shape[0], size=self.n_density)
+            H_grasps = grasp_obj.good_grasps[rix, ...]
         except:
-            print('lets see')
-        H_grasps = grasp_obj.good_grasps[rix, ...]
+            raise NoPositiveGraspsException
         return H_grasps
 
-    def _get_sdf(self, grasp_obj, grasp_file):
+    def _get_sdf(self, grasp_obj):
 
         mesh_fname = grasp_obj.mesh_fname
         mesh_scale = grasp_obj.mesh_scale
@@ -523,7 +540,7 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         sdf = sdf_dict['sdf'][rix[:self.n_occ]]*scale*mesh_scale
         return xyz, sdf
 
-    def _get_mesh_pcl(self, grasp_obj):
+    def _get_mesh_pcl(self, grasp_obj, n_scans=1):
         mesh = grasp_obj.load_mesh()
         ## 1. Mesh Centroid ##
         centroid = mesh.centroid
@@ -532,13 +549,14 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         mesh.apply_transform(H)
         ######################
         #time0 = time.time()
-        P = self.scan_pointcloud.get_hq_scan_view(mesh)
+        P = self.scan_pointcloud.get_hq_scan_view(mesh, n_scans=n_scans)
+
         #print('Sample takes {} s'.format(time.time() - time0))
         P +=centroid
         try:
             rix = np.random.randint(low=0, high=P.shape[0], size=self.n_pointcloud)
         except:
-            print('here')
+            print('Error sampling the point cloud')
         return P[rix, :]
 
     def _get_item(self, index):
@@ -551,11 +569,16 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         else:
             grasps_obj = AcronymGrasps(self.test_grasp_files[index])
 
+        # Check if there are good grasps
+        if grasps_obj.good_grasps.shape[0] == 0:
+            # If there are no good grasps, raise a custom exception
+            raise NoPositiveGraspsException()
+
         ## SDF
-        xyz, sdf = self._get_sdf(grasps_obj, self.train_grasp_files[index])
+        xyz, sdf = self._get_sdf(grasps_obj)
 
         ## PointCloud
-        pcl = self._get_mesh_pcl(grasps_obj)
+        pcl = self._get_mesh_pcl(grasps_obj, n_scans=1)  # sample only one view
 
         ## Grasps good/bad
         H_grasps = self._get_grasps(grasps_obj)
@@ -615,7 +638,80 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
 
     def __getitem__(self, index):
         'Generates one sample of data'
-        return self._get_item(index)
+        starting_index = index
+        while True:
+            try:
+                return self._get_item(index)
+            except NoPositiveGraspsException:
+                # Skip current index and try the next one
+                index = (index + 1) % self.len
+                if index == starting_index:
+                    # If we've looped back to the starting index, raise an exception
+                    raise StopIteration("No valid data found in dataset.")
+
+    def clear(self):
+        # This is a common issue with PyTorch DataLoader when using pyrender.
+        # The memory leak typically occurs because pyrender creates OpenGL contexts that aren't properly
+        # cleaned up when using multiprocessing (or even in single-process mode).
+        # This function should be called after each epoch to free up memory.
+        del self.scan_pointcloud
+        gc.collect()
+        self.scan_pointcloud = ScanPointcloud()
+
+
+# Custom exception class
+class NoPositiveGraspsException(Exception):
+    pass
+
+
+def load_train_test_split_files(allowed_categories, dataset_acronym_root_folder):
+    """Load and accumulate train and test file paths based on allowed_categories."""
+    train_files = []
+    test_files = []
+
+    splits_dir = os.path.join(dataset_acronym_root_folder, 'splits')
+
+    if allowed_categories != 'CAT10':
+        json_file_name = f"{allowed_categories}.json"
+        json_file_path = os.path.join(splits_dir, json_file_name)
+
+        with open(json_file_path, 'r') as json_file:
+            split_data = json.load(json_file)
+
+        train_file_names = split_data.get('train', [])
+        test_file_names = split_data.get('test', [])
+
+        # Combine base path with file names
+        train_files = [os.path.join(dataset_acronym_root_folder, 'grasps', fname) for fname in train_file_names]
+        test_files = [os.path.join(dataset_acronym_root_folder, 'grasps', fname) for fname in test_file_names]
+    else:
+        allowed_categories_set = CAT10
+        # Multiple categories, accumulate files from each
+        for category in allowed_categories_set:
+            json_file_name = f"{category}.json"
+            json_file_path = os.path.join(splits_dir, json_file_name)
+
+            # Load the JSON file content
+            with open(json_file_path, 'r') as json_file:
+                split_data = json.load(json_file)
+
+            # Extract training and testing file names
+            train_file_names = split_data.get('train', [])
+            test_file_names = split_data.get('test', [])
+
+            # Combine base path with file names and accumulate
+            train_files.extend([os.path.join(dataset_acronym_root_folder, 'grasps', fname) for fname in train_file_names])
+            test_files.extend([os.path.join(dataset_acronym_root_folder, 'grasps', fname) for fname in test_file_names])
+
+    return train_files, test_files
+
+
+def get_memory_usage_mb():
+    process = psutil.Process()
+    memory_bytes = process.memory_info().rss
+    # Convert to MB and round to 2 decimal places
+    memory_mb = round(memory_bytes / (1024 * 1024), 2)
+    return memory_mb
 
 
 if __name__ == '__main__':
@@ -629,6 +725,73 @@ if __name__ == '__main__':
     ## Pointcloud conditioned dataset
     dataset = PartialPointcloudAcronymAndSDFDataset(visualize=False, augmented_rotation=True, one_object=False)
 
-    train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
-    for x,y in train_dataloader:
-        print(x)
+    # train_dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
+    # for x,y in train_dataloader:
+    #     print(x)
+
+    ## Partial Pointcloud conditioned dataset with custom train and test files
+    dataset_dir = get_data_src()
+
+    # Define paths to the grasp files
+    train_file = os.path.join(
+        dataset_dir,
+        'grasps/Mug/Mug_6a9b31e1298ca1109c515ccf0f61e75f_0.029998777830639544.h5'
+    )
+    test_file = os.path.join(
+        dataset_dir,
+        'grasps/Mug/Mug_ba10400c108e5c3f54e1b6f41fdd78a_0.01695507616001961.h5'
+    )
+
+    # Define the train and test files using the paths
+    train_files = [train_file] * 10
+    test_files = [test_file] * 5
+
+    train_files, test_files = load_train_test_split_files(
+        'Mug', os.path.join(get_root_src(), '..', 'dataset_acronym_shapenetsem')
+    )
+
+    # Instantiate the dataset with custom train files
+    train_dataset = PartialPointcloudAcronymAndSDFDataset(
+        n_pointcloud=1024,
+        visualize=False,
+        augmented_rotation=True,
+        one_object=False,
+        phase='train',
+        use_split_files=True,
+        train_files=train_files
+    )
+
+    # Instantiate the dataset with custom test files
+    test_dataset = PartialPointcloudAcronymAndSDFDataset(
+        n_pointcloud=1024,
+        visualize=False,
+        augmented_rotation=True,
+        one_object=False,
+        phase='test',
+        use_split_files=True,
+        test_files=test_files
+    )
+
+    # Create DataLoaders
+    data_loader_options = {}
+    data_loader_options['num_workers'] = 0
+    data_loader_options['pin_memory'] = True
+    data_loader_options['persistent_workers'] = data_loader_options['num_workers'] > 0
+
+    train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True, **data_loader_options)
+    test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=False)
+
+    # Iterate over the train DataLoader
+    print("Training Data:")
+    while True:
+        train_dataloader.dataset.clear()
+        print(f"Current memory usage: {get_memory_usage_mb()} MB")
+        start_time = time.time()
+        for x, y in train_dataloader:
+            print(time.time()-start_time)
+            # print(x)
+            pass
+            start_time = time.time()
+
+
+
