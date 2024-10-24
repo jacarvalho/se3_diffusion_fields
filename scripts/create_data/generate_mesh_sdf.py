@@ -15,8 +15,9 @@ import pyrender
 
 from se3dif.utils import makedirs
 
-DATA_FOLDER = 'data'
-OBJ_CLASSES = ['Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick']
+DATA_FOLDER = '../data'
+# OBJ_CLASSES = ['Cow', 'Sheep', 'Cat', 'Dog', 'Pizza', 'Elephant', 'Donkey', 'RubiksCube', 'Tank', 'Truck', 'USBStick']
+OBJ_CLASSES = ['Cap', 'CellPhone']
 
 #OBJ_CLASSES = ['Bottle']
 ## Set data folder
