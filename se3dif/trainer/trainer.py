@@ -14,7 +14,9 @@ from tqdm.autonotebook import tqdm
 
 def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
           summary_fn=None, iters_til_checkpoint=None, val_dataloader=None, clip_grad=False, val_loss_fn=None,
-          overwrite=True, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu'):
+          overwrite=True, optimizers=None, batches_per_validation=10,  rank=0, max_steps=None, device='cpu',
+          pbar_frequency=100
+          ):
 
     if optimizers is None:
         optimizers = [torch.optim.Adam(lr=lr, params=model.parameters())]
@@ -93,8 +95,8 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 for optim in optimizers:
                     optim.step()
 
-                if rank == 0:
-                    pbar.update(1)
+                if rank == 0 and total_steps % pbar_frequency == 0:
+                    pbar.update(total_steps - pbar.n)
 
                 if not total_steps % steps_til_summary and rank == 0:
                     print("Epoch %d, Total loss %0.6f, iteration time %0.6f" % (epoch, train_loss, time.time() - start_time))
