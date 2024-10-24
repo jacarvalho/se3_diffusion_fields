@@ -553,10 +553,7 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
 
         #print('Sample takes {} s'.format(time.time() - time0))
         P += centroid
-        try:
-            rix = np.random.randint(low=0, high=P.shape[0], size=self.n_pointcloud)
-        except:
-            raise PointCloudSamplingError()
+        rix = np.random.randint(low=0, high=P.shape[0], size=self.n_pointcloud)
         return P[rix, :]
 
     def _get_item(self, index):
@@ -572,13 +569,17 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         # Check if there are good grasps
         if grasps_obj.good_grasps.shape[0] == 0:
             # If there are no good grasps, raise a custom exception
-            raise NoPositiveGraspsException()
+            raise NoPositiveGraspsException
 
         ## SDF
         xyz, sdf = self._get_sdf(grasps_obj)
 
         ## PointCloud
-        pcl = self._get_mesh_pcl(grasps_obj, n_scans=1)  # sample only one view
+        try:
+            pcl = self._get_mesh_pcl(grasps_obj, n_scans=1)  # sample only one view
+        except:
+            # If there was an error sampling the point cloud, raise a custom exception
+            raise PointCloudSamplingError
 
         ## Grasps good/bad
         H_grasps = self._get_grasps(grasps_obj)
@@ -642,7 +643,7 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         while True:
             try:
                 return self._get_item(index)
-            except NoPositiveGraspsException or PointCloudSamplingError:
+            except (NoPositiveGraspsException, PointCloudSamplingError) as e:
                 # Skip current index and try the next one
                 index = (index + 1) % self.len
                 if index == starting_index:
