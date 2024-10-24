@@ -18,6 +18,10 @@ from se3dif.utils import load_experiment_specifications
 
 from se3dif.trainer.learning_rate_scheduler import get_learning_rate_schedules
 
+import matplotlib
+matplotlib.use('Agg')
+
+
 base_dir = os.path.abspath(os.path.dirname(__file__))
 root_dir = os.path.abspath(os.path.dirname(__file__ + '/../../../../../'))
 

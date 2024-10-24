@@ -552,11 +552,11 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         P = self.scan_pointcloud.get_hq_scan_view(mesh, n_scans=n_scans)
 
         #print('Sample takes {} s'.format(time.time() - time0))
-        P +=centroid
+        P += centroid
         try:
             rix = np.random.randint(low=0, high=P.shape[0], size=self.n_pointcloud)
         except:
-            print('Error sampling the point cloud')
+            raise PointCloudSamplingError()
         return P[rix, :]
 
     def _get_item(self, index):
@@ -642,7 +642,7 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
         while True:
             try:
                 return self._get_item(index)
-            except NoPositiveGraspsException:
+            except NoPositiveGraspsException or PointCloudSamplingError:
                 # Skip current index and try the next one
                 index = (index + 1) % self.len
                 if index == starting_index:
@@ -661,6 +661,9 @@ class PartialPointcloudAcronymAndSDFDataset(Dataset):
 
 # Custom exception class
 class NoPositiveGraspsException(Exception):
+    pass
+
+class PointCloudSamplingError(Exception):
     pass
 
 
