@@ -45,7 +45,7 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
             # clear cuda memory
             torch.cuda.empty_cache()
 
-            print(f"Current memory usage: {get_memory_usage_mb()} MB")
+            # print(f"Current memory usage: {get_memory_usage_mb()} MB")
 
             if not epoch % epochs_til_checkpoint and epoch and rank == 0:
                 torch.save(model.state_dict(),
